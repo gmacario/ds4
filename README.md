@@ -348,6 +348,9 @@ In two-Mac tensor parallel mode, pass the same `--vision` file on both the
 coordinator and worker; the coordinator encodes the image and sends the
 projected visual tokens to the worker.
 
+To build and run the CUDA server in a Docker container (with the model mounted
+from the host), see [CONTAINER.md](CONTAINER.md).
+
 ## DSpark Speculative Decoding
 
 DSpark is an auxiliary draft model released by DeepSeek for DeepSeek V4 Flash.
