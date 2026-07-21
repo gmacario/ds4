@@ -184,6 +184,9 @@ make cpu              # CPU-only diagnostics build
 select another supported GGUF from `./gguf/`. Run `./ds4 --help` and
 `./ds4-server --help` for the full flag list.
 
+To build and run the CUDA server in a Docker container (with the model mounted
+from the host), see [CONTAINER.md](CONTAINER.md).
+
 ## DSpark Speculative Decoding
 
 DSpark is an auxiliary draft model released by DeepSeek for DeepSeek V4 Flash.
