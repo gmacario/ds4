@@ -3,15 +3,19 @@
 # Multi-stage build: a CUDA "devel" image compiles the binaries, then only the
 # binaries and the CUDA runtime libraries are copied into a slim "runtime"
 # image. Model GGUF files are NEVER baked into the image (they range from tens
-# to hundreds of GB); mount them at runtime under /models instead.
+# to hundreds of GB); the container downloads them into a mounted /models
+# volume on first start instead (see entrypoint.sh).
 #
 # Build (choose CUDA_ARCH for your GPU, see the table below):
 #   docker build -t ds4:cuda --build-arg CUDA_ARCH=sm_90 .
 #
-# Run (requires the NVIDIA Container Toolkit on the host):
+# Run (requires the NVIDIA Container Toolkit on the host). With no arguments
+# the entrypoint downloads DS4_MODEL (default q2-imatrix) into /models and
+# starts ds4-server on 0.0.0.0:8000:
 #   docker run --rm --gpus all -p 8000:8000 \
-#       -v /path/to/gguf:/models ds4:cuda \
-#       ds4-server --host 0.0.0.0 --port 8000 -m /models/ds4flash.gguf --ctx 32768
+#       -v /path/to/gguf:/models -v /path/to/kv-cache:/kv-cache ds4:cuda
+#
+# See CONTAINER.md for the full environment variable reference.
 #
 # CUDA_ARCH picks the nvcc -arch value. Common choices:
 #   sm_89   Ada Lovelace   (L40S, L4, RTX 4090)
@@ -73,14 +77,22 @@ ENV PATH=/app:${PATH}
 
 COPY --from=builder /src/ds4 /src/ds4-server /src/ds4-bench /src/ds4-eval /src/ds4-agent /app/
 COPY --from=builder /src/download_model.sh /app/
+COPY entrypoint.sh /app/
+RUN chmod +x /app/download_model.sh /app/entrypoint.sh
 
-# Default model location for the CMD below; mount your GGUF here.
-VOLUME ["/models"]
+# Managed defaults consumed by entrypoint.sh; override any of these with
+# `docker run -e VAR=value` or the environment: block in docker-compose.yml.
+ENV DS4_HOST=0.0.0.0 \
+    DS4_PORT=8000 \
+    DS4_CTX=32768 \
+    DS4_MODEL=q2-imatrix \
+    DS4_GGUF_DIR=/models \
+    DS4_KV_DISK_DIR=/kv-cache \
+    DS4_KV_DISK_SPACE_MB=8192 \
+    DS4_ENABLE_MTP=0 \
+    DS4_MTP_DRAFT=2
+
+VOLUME ["/models", "/kv-cache"]
 EXPOSE 8000
 
-# ds4-server defaults to 127.0.0.1:8000, which is unreachable from outside the
-# container, so bind 0.0.0.0 here. CUDA is already the default backend in a
-# CUDA build. Override the whole command to run the CLI or a different model:
-#   docker run --gpus all ds4:cuda ds4 -p "Hello" -m /models/ds4flash.gguf
-CMD ["ds4-server", "--host", "0.0.0.0", "--port", "8000", \
-     "-m", "/models/ds4flash.gguf", "--ctx", "32768"]
+ENTRYPOINT ["/app/entrypoint.sh"]

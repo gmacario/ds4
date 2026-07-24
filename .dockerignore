@@ -43,7 +43,13 @@ tests/test_sampling
 __pycache__/
 *.pyc
 
-# Container artifacts themselves.
+# Real secrets must never enter the build context; the committed template is fine.
+.env
+!.env.example
+
+# Container artifacts themselves (read directly by the Docker CLI, not needed
+# inside the image).
 Dockerfile
 .dockerignore
 docker-compose.yml
+/kv-cache/

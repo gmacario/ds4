@@ -10,6 +10,8 @@
 /ds4flash.gguf
 /TODO.md
 /gguf/
+/kv-cache/
+.env
 /core
 /core.*
 /tests/test_engine_mgpu_placement

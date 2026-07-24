@@ -1,14 +1,13 @@
 # DwarfStar (ds4) CUDA server via Docker Compose.
 #
 # Requires the NVIDIA Container Toolkit on the host so the GPU is visible to
-# the container. Put your GGUF files in ./gguf (or set DS4_GGUF_DIR) and make
-# sure ./gguf/ds4flash.gguf exists (download_model.sh creates that symlink), or
-# override DS4_MODEL below.
+# the container. Copy .env.example to .env and adjust as needed, then:
 #
-#   DS4_GGUF_DIR=/data/gguf docker compose up --build
+#   docker compose up --build
 #
-# Choose the GPU arch at build time with CUDA_ARCH (see Dockerfile for values):
-#   CUDA_ARCH=sm_89 docker compose build
+# On first start the container downloads DS4_MODEL into the weights volume,
+# then serves ds4-server on port 8000. See .env.example and CONTAINER.md for
+# every variable and its default.
 
 services:
   ds4-server:
@@ -16,26 +15,28 @@ services:
       context: .
       dockerfile: Dockerfile
       args:
-        # Override for your GPU, e.g. sm_89 (Ada), sm_90 (Hopper), sm_120
-        # (Blackwell RTX). Leave empty via `CUDA_ARCH= docker compose build`
-        # for the DGX Spark / GB10 path.
         CUDA_ARCH: ${CUDA_ARCH:-sm_90}
     image: ds4:cuda
     ports:
-      - "8000:8000"
+      - "${DS4_PORT:-8000}:8000"
+    environment:
+      DS4_MODEL: ${DS4_MODEL:-q2-imatrix}
+      DS4_CTX: ${DS4_CTX:-32768}
+      DS4_PORT: 8000
+      DS4_HOST: 0.0.0.0
+      DS4_KV_DISK_SPACE_MB: ${DS4_KV_DISK_SPACE_MB:-8192}
+      DS4_ENABLE_MTP: ${DS4_ENABLE_MTP:-0}
+      DS4_MTP_DRAFT: ${DS4_MTP_DRAFT:-2}
+      DS4_MTP_MARGIN: ${DS4_MTP_MARGIN:-}
+      DS4_MODEL_PATH: ${DS4_MODEL_PATH:-}
+      DS4_THREADS: ${DS4_THREADS:-}
+      DS4_EXTRA_ARGS: ${DS4_EXTRA_ARGS:-}
+      HF_TOKEN: ${HF_TOKEN:-}
     volumes:
-      # Host GGUF directory mounted read-only inside the container.
-      - ${DS4_GGUF_DIR:-./gguf}:/models:ro
-    command:
-      - ds4-server
-      - --host
-      - "0.0.0.0"
-      - --port
-      - "8000"
-      - -m
-      - ${DS4_MODEL:-/models/ds4flash.gguf}
-      - --ctx
-      - "32768"
+      # Writable: the container downloads GGUF weights here on first start.
+      - ${DS4_WEIGHTS_HOST_DIR:-./gguf}:/models
+      - ${DS4_KV_HOST_DIR:-./kv-cache}:/kv-cache
+    restart: unless-stopped
     # Modern Docker Compose GPU reservation (Compose spec / docker compose v2).
     deploy:
       resources:

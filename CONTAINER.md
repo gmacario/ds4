@@ -2,11 +2,9 @@
 
 This describes how to build and run ds4 in a Docker container on
 **CUDA-enabled hardware**. The container compiles the CUDA build of ds4 and
-runs the OpenAI/Anthropic-compatible `ds4-server` (or any other ds4 binary)
-against a model you mount from the host.
-
-Model weights are **never** baked into the image. DeepSeek V4 Flash/PRO and GLM
-GGUF files range from tens to hundreds of GB, so you mount them at runtime.
+runs the OpenAI/Anthropic-compatible `ds4-server` against a model it downloads
+into a mounted volume — model weights are **never** baked into the image, since
+DeepSeek V4 Flash/PRO and GLM GGUF files range from tens to hundreds of GB.
 
 ## Prerequisites
 
@@ -23,35 +21,83 @@ On the host:
 * Enough disk and RAM/VRAM for the model you intend to run (see the model sizes
   in `download_model.sh` and the README).
 
-## 1. Get a model
-
-Download a GGUF onto the host into a directory you will mount, for example
-`./gguf`. `download_model.sh` creates the `ds4flash.gguf` symlink the defaults
-expect:
+## Quick start
 
 ```sh
-./download_model.sh q2-imatrix        # ~81 GB, good for a single 96/128 GB GPU class
-# or a larger quant on bigger machines:
-./download_model.sh q4-imatrix        # ~153 GB
+cp .env.example .env    # adjust DS4_MODEL, CUDA_ARCH, etc.
+docker compose up --build
 ```
 
-You can also run the downloader inside the container (curl path only, used by
-the smaller Flash files):
+On first start the container downloads `DS4_MODEL` (default `q2-imatrix`, about
+81 GB) into `./gguf` and starts `ds4-server` on `http://localhost:8000`.
+Subsequent starts reuse the already-downloaded weights.
 
 ```sh
-docker run --rm -v "$PWD/gguf:/models" -e DS4_GGUF_DIR=/models \
-    ds4:cuda download_model.sh q2-imatrix
+curl http://localhost:8000/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"ds4","messages":[{"role":"user","content":"Hello"}]}'
 ```
 
-The larger PRO and GLM files need the Hugging Face CLI, which is not installed
-in the image; download those on the host instead.
+## How the entrypoint works
 
-## 2. Build the image
+The image's `ENTRYPOINT` is `entrypoint.sh`. Its behavior depends on the first
+argument:
+
+* **No arguments, or arguments starting with `-`** (i.e. `ds4-server` flags):
+  the managed flow runs — download `DS4_MODEL` if needed, then start
+  `ds4-server` configured from the environment variables below, with any flags
+  you passed appended so they can override the generated ones.
+* **An explicit command** (`ds4`, `ds4-bench`, `ds4-eval`, `ds4-agent`,
+  `download_model.sh`, `sh`, ...): run directly, bypassing the managed flow
+  entirely. Useful for the CLI, benchmarks, or manual model management:
+
+  ```sh
+  docker run --rm --gpus all -v "$PWD/gguf:/models" ds4:cuda \
+      ds4 -p "Write a haiku about GPUs" -m /models/ds4flash.gguf
+
+  docker run --rm --gpus all -v "$PWD/gguf:/models" ds4:cuda \
+      ds4-bench -m /models/ds4flash.gguf --ctx 32768
+  ```
+
+  CUDA is the default backend in a CUDA build, so `--cuda` is not required.
+
+## Environment variables
+
+Set these with `docker run -e VAR=value`, in `.env` for Compose, or in
+`docker-compose.yml`'s `environment:` block. See `.env.example` for the same
+list with defaults inline.
+
+| Variable | Default | Effect |
+| --- | --- | --- |
+| `DS4_MODEL` | `q2-imatrix` | Target passed to `download_model.sh` on startup. One of its supported names (`q2-imatrix`, `q2-q4-imatrix`, `q4-imatrix`, `pro-q2-imatrix`, `glm-unsloth-q4`, `glm-antirez-q2`, `glm-antirez-iq2xxs`, `glm-antirez-q4`, ...), or `none` to skip downloading and rely on `DS4_MODEL_PATH` or a pre-mounted `./gguf/ds4flash.gguf`. |
+| `DS4_GGUF_DIR` | `/models` | Download directory inside the container; matches the `/models` volume. |
+| `DS4_MODEL_PATH` | *(unset)* | Explicit `-m/--model` override, e.g. `/models/my-custom.gguf`. |
+| `DS4_CTX` | `32768` | `--ctx`. |
+| `DS4_HOST` | `0.0.0.0` | `--host`. `ds4-server` defaults to `127.0.0.1`, which is unreachable from outside the container; keep this at `0.0.0.0`. |
+| `DS4_PORT` | `8000` | `--port`, and the port published by Compose. |
+| `DS4_KV_DISK_DIR` | `/kv-cache` | `--kv-disk-dir`; matches the `/kv-cache` volume. Set to `none` to disable the on-disk KV cache. |
+| `DS4_KV_DISK_SPACE_MB` | `8192` | `--kv-disk-space-mb`. |
+| `DS4_ENABLE_MTP` | `0` | Set to `1`/`true`/`yes`/`on` to download the MTP GGUF and pass `--mtp`/`--mtp-draft`. Only compatible with the Flash q2/q4 imatrix quants. |
+| `DS4_MTP_DRAFT` | `2` | `--mtp-draft`, used only when MTP is enabled. |
+| `DS4_MTP_MARGIN` | *(unset)* | `--mtp-margin`, used only when MTP is enabled and set. |
+| `DS4_THREADS` | *(unset)* | `--threads`, if set. |
+| `DS4_EXTRA_ARGS` | *(unset)* | Extra flags appended last, e.g. `"--quality --cuda-tensor-parallel"`. Word-split, so quote multiple flags in one string. |
+| `HF_TOKEN` | *(unset)* | Forwarded to `download_model.sh`, needed for the larger PRO/GLM downloads. |
+
+Compose-only (host-side, not passed into the container):
+
+| Variable | Default | Effect |
+| --- | --- | --- |
+| `CUDA_ARCH` | `sm_90` | Build-time `nvcc -arch` value (see the table below). |
+| `DS4_WEIGHTS_HOST_DIR` | `./gguf` | Host directory mounted at `/models`, writable. Matches `download_model.sh`'s own default so weights fetched on the host are reused. |
+| `DS4_KV_HOST_DIR` | `./kv-cache` | Host directory mounted at `/kv-cache`. |
+
+## Building for your GPU
 
 Pick `CUDA_ARCH` for your GPU:
 
 | GPU family            | Examples                | `CUDA_ARCH`         |
-| --------------------- | ----------------------- | ------------------- |
+| --------------------- | ------------------------ | ------------------- |
 | Ada Lovelace          | L40S, L4, RTX 4090      | `sm_89`             |
 | Hopper                | H100, H200              | `sm_90` *(default)* |
 | Blackwell datacenter  | B100, B200              | `sm_100`            |
@@ -67,6 +113,9 @@ docker build -t ds4:cuda --build-arg CUDA_ARCH=sm_89 .
 
 # DGX Spark / GB10 — mirrors `make cuda-spark`, no explicit -arch
 docker build -t ds4:spark --build-arg CUDA_ARCH= .
+
+# With Compose:
+CUDA_ARCH=sm_89 docker compose build
 ```
 
 Notes:
@@ -78,78 +127,30 @@ Notes:
   portable binary with `--build-arg CPU_FLAG=-march=x86-64-v3`.
 * The `nvcc` compile of `ds4_cuda.cu` is large; expect a multi-minute build and
   a few GB of RAM during compilation.
+* A build embeds SASS for the chosen arch plus forward-compatible PTX, so the
+  image also runs on newer GPUs of the same family via JIT.
 
-## 3. Run the server
+## Manual `docker run`
+
+Without Compose, mount both volumes explicitly (both must be writable — the
+container downloads weights into `/models` and writes checkpoints into
+`/kv-cache`):
 
 ```sh
 docker run --rm --gpus all -p 8000:8000 \
-    -v "$PWD/gguf:/models:ro" \
-    ds4:cuda \
-    ds4-server --host 0.0.0.0 --port 8000 -m /models/ds4flash.gguf --ctx 32768
+    -v "$PWD/gguf:/models" \
+    -v "$PWD/kv-cache:/kv-cache" \
+    -e DS4_MODEL=q2-imatrix \
+    ds4:cuda
 ```
-
-The default `CMD` already runs exactly this, so if your model is at
-`/models/ds4flash.gguf` you can shorten it to:
-
-```sh
-docker run --rm --gpus all -p 8000:8000 -v "$PWD/gguf:/models:ro" ds4:cuda
-```
-
-Then call the API (OpenAI-compatible):
-
-```sh
-curl http://localhost:8000/v1/chat/completions \
-  -H 'Content-Type: application/json' \
-  -d '{"model":"ds4","messages":[{"role":"user","content":"Hello"}]}'
-```
-
-> The server binds `127.0.0.1:8000` by default, which is unreachable from
-> outside the container. The image overrides this to `--host 0.0.0.0`; keep
-> that flag if you write your own command.
-
-## 4. Run the CLI or other binaries
-
-The image ships all five binaries (`ds4`, `ds4-server`, `ds4-bench`,
-`ds4-eval`, `ds4-agent`) on the `PATH`. Override the command to use them:
-
-```sh
-# One-shot CLI prompt
-docker run --rm --gpus all -v "$PWD/gguf:/models:ro" ds4:cuda \
-    ds4 -p "Write a haiku about GPUs" -m /models/ds4flash.gguf
-
-# Benchmark
-docker run --rm --gpus all -v "$PWD/gguf:/models:ro" ds4:cuda \
-    ds4-bench -m /models/ds4flash.gguf --ctx 32768
-```
-
-CUDA is the default backend in a CUDA build, so `--cuda` is not required.
-
-## 5. Docker Compose
-
-`docker-compose.yml` wires up the build, the GPU reservation, the model volume,
-and the server command:
-
-```sh
-# Build for your GPU and start the server
-CUDA_ARCH=sm_90 DS4_GGUF_DIR=./gguf docker compose up --build
-```
-
-Environment variables it honors:
-
-* `CUDA_ARCH` — GPU arch passed to the build (default `sm_90`).
-* `DS4_GGUF_DIR` — host directory mounted at `/models` (default `./gguf`).
-* `DS4_MODEL` — model path inside the container (default
-  `/models/ds4flash.gguf`).
 
 ## Multi-GPU
 
 On a single host with several CUDA GPUs, ds4 can split DeepSeek V4 Flash across
-them with tensor parallelism. Add the flag to the command:
+them with tensor parallelism:
 
 ```sh
-docker run --rm --gpus all -p 8000:8000 -v "$PWD/gguf:/models:ro" ds4:cuda \
-    ds4-server --host 0.0.0.0 --port 8000 -m /models/ds4flash.gguf \
-    --ctx 32768 --cuda-tensor-parallel
+DS4_EXTRA_ARGS="--cuda-tensor-parallel" docker compose up --build
 ```
 
 Expose only some GPUs with `--gpus '"device=0,1"'` or the standard
@@ -169,7 +170,10 @@ details.
 * **`no kernel image is available for execution`:** the `CUDA_ARCH` used at
   build time does not match (and cannot JIT to) the runtime GPU. Rebuild with
   the correct arch from the table above.
-* **Server reachable only from localhost:** ensure the command includes
-  `--host 0.0.0.0` and you published the port with `-p 8000:8000`.
-* **Model not found:** confirm the GGUF is under the mounted directory and the
-  `-m` path matches, e.g. `/models/ds4flash.gguf`.
+* **Server reachable only from localhost:** ensure `DS4_HOST=0.0.0.0` (the
+  default) and that you published the port.
+* **"Unknown model" from `download_model.sh`:** `DS4_MODEL` must be one of its
+  exact target names (`q2-imatrix`, not `q2`); see the table above or run
+  `download_model.sh --help`.
+* **Model re-downloads every start:** confirm the weights volume is actually
+  persisted (bind mount or named volume), not the container's writable layer.
