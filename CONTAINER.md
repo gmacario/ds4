@@ -98,6 +98,8 @@ Pick `CUDA_ARCH` for your GPU:
 
 | GPU family            | Examples                | `CUDA_ARCH`         |
 | --------------------- | ------------------------ | ------------------- |
+| Ampere datacenter     | A100, A30               | `sm_80`             |
+| Ampere                | A40, A10, RTX 30xx      | `sm_86`             |
 | Ada Lovelace          | L40S, L4, RTX 4090      | `sm_89`             |
 | Hopper                | H100, H200              | `sm_90` *(default)* |
 | Blackwell datacenter  | B100, B200              | `sm_100`            |
@@ -108,6 +110,9 @@ Pick `CUDA_ARCH` for your GPU:
 # Hopper (default)
 docker build -t ds4:cuda .
 
+# Ampere (A40)
+docker build -t ds4:cuda --build-arg CUDA_ARCH=sm_86 .
+
 # Ada Lovelace (L40S / RTX 4090)
 docker build -t ds4:cuda --build-arg CUDA_ARCH=sm_89 .
 
@@ -115,7 +120,7 @@ docker build -t ds4:cuda --build-arg CUDA_ARCH=sm_89 .
 docker build -t ds4:spark --build-arg CUDA_ARCH= .
 
 # With Compose:
-CUDA_ARCH=sm_89 docker compose build
+CUDA_ARCH=sm_86 docker compose build
 ```
 
 Notes:
@@ -129,6 +134,11 @@ Notes:
   a few GB of RAM during compilation.
 * A build embeds SASS for the chosen arch plus forward-compatible PTX, so the
   image also runs on newer GPUs of the same family via JIT.
+* **A40 requires `CUDA_ARCH=sm_86`.** The default (`sm_90`, Hopper) targets a
+  different, newer GPU family; PTX forward compatibility does not cover running
+  Hopper-targeted code on an older Ampere card. It may still build and even run
+  without an explicit CUDA error, but is unsupported and not guaranteed correct
+  or performant — always set `sm_86` explicitly for A40.
 
 ## Manual `docker run`
 
