@@ -37,6 +37,8 @@ Objective-C only where Metal requires it and Metal kernels under `metal/`.
   tool-call mapping, disk KV cache policy.
 - `ds4_metal.m`: Objective-C Metal runtime and kernel wrappers.
 - `metal/*.metal`: compute kernels.
+- `Dockerfile`, `entrypoint.sh`, `docker-compose.yml`: Linux CUDA container
+  build and `ds4-server` serving, documented in `CONTAINER.md`.
 - `tests/`: unit and live integration tests.
 - `misc/`: ignored notes, experiments, and old planning material.
 

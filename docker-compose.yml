@@ -1,0 +1,49 @@
+# DwarfStar (ds4) CUDA server via Docker Compose.
+#
+# Requires the NVIDIA Container Toolkit on the host so the GPU is visible to
+# the container. Copy .env.example to .env and adjust as needed, then:
+#
+#   docker compose up --build
+#
+# On first start the container downloads DS4_MODEL into the weights volume,
+# then serves ds4-server on port 8000. See .env.example and CONTAINER.md for
+# every variable and its default.
+
+services:
+  ds4-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        CUDA_ARCH: ${CUDA_ARCH:-sm_90}
+    image: ds4:cuda
+    ports:
+      - "${DS4_PORT:-8000}:8000"
+    environment:
+      DS4_MODEL: ${DS4_MODEL:-q2-imatrix}
+      DS4_CTX: ${DS4_CTX:-32768}
+      DS4_PORT: 8000
+      DS4_HOST: 0.0.0.0
+      DS4_KV_DISK_SPACE_MB: ${DS4_KV_DISK_SPACE_MB:-8192}
+      DS4_ENABLE_MTP: ${DS4_ENABLE_MTP:-0}
+      DS4_MTP_DRAFT: ${DS4_MTP_DRAFT:-2}
+      DS4_MTP_MARGIN: ${DS4_MTP_MARGIN:-}
+      DS4_MODEL_PATH: ${DS4_MODEL_PATH:-}
+      DS4_THREADS: ${DS4_THREADS:-}
+      DS4_EXTRA_ARGS: ${DS4_EXTRA_ARGS:-}
+      HF_TOKEN: ${HF_TOKEN:-}
+    volumes:
+      # Writable: the container downloads GGUF weights here on first start.
+      - ${DS4_WEIGHTS_HOST_DIR:-./gguf}:/models
+      - ${DS4_KV_HOST_DIR:-./kv-cache}:/kv-cache
+    restart: unless-stopped
+    # Modern Docker Compose GPU reservation (Compose spec / docker compose v2).
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    # Older Docker Compose without the deploy.devices support can instead use:
+    #   gpus: all
