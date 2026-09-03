@@ -1,0 +1,48 @@
+# DwarfStar (ds4) CUDA server via Docker Compose.
+#
+# Requires the NVIDIA Container Toolkit on the host so the GPU is visible to
+# the container. Put your GGUF files in ./gguf (or set DS4_GGUF_DIR) and make
+# sure ./gguf/ds4flash.gguf exists (download_model.sh creates that symlink), or
+# override DS4_MODEL below.
+#
+#   DS4_GGUF_DIR=/data/gguf docker compose up --build
+#
+# Choose the GPU arch at build time with CUDA_ARCH (see Dockerfile for values):
+#   CUDA_ARCH=sm_89 docker compose build
+
+services:
+  ds4-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        # Override for your GPU, e.g. sm_89 (Ada), sm_90 (Hopper), sm_120
+        # (Blackwell RTX). Leave empty via `CUDA_ARCH= docker compose build`
+        # for the DGX Spark / GB10 path.
+        CUDA_ARCH: ${CUDA_ARCH:-sm_90}
+    image: ds4:cuda
+    ports:
+      - "8000:8000"
+    volumes:
+      # Host GGUF directory mounted read-only inside the container.
+      - ${DS4_GGUF_DIR:-./gguf}:/models:ro
+    command:
+      - ds4-server
+      - --host
+      - "0.0.0.0"
+      - --port
+      - "8000"
+      - -m
+      - ${DS4_MODEL:-/models/ds4flash.gguf}
+      - --ctx
+      - "32768"
+    # Modern Docker Compose GPU reservation (Compose spec / docker compose v2).
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    # Older Docker Compose without the deploy.devices support can instead use:
+    #   gpus: all
